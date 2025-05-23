@@ -1,0 +1,361 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>国際政治学・玉置ゼミ用英単語帳</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script type="module">
+        // Firebase SDK のインポート
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { 
+            getAuth,
+            onAuthStateChanged,
+            createUserWithEmailAndPassword,
+            signInWithEmailAndPassword,
+            signOut
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { 
+            getFirestore, 
+            doc, 
+            addDoc, 
+            getDoc, 
+            getDocs, 
+            deleteDoc, 
+            updateDoc, 
+            collection, 
+            onSnapshot,
+            serverTimestamp,
+            query, 
+            orderBy
+        } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // ▼▼▼▼▼ ユーザー設定項目 (固定済み) ▼▼▼▼▼
+        const firebaseConfig = {
+            apiKey: "AIzaSyDmAjZxiTHiu_bwSCa15joxHkkd-xo17qw",
+            authDomain: "international-politics-tango.firebaseapp.com",
+            projectId: "international-politics-tango",
+            storageBucket: "international-politics-tango.firebasestorage.app",
+            messagingSenderId: "836725606223",
+            appId: "1:836725606223:web:4280d0bf6726c1d093273a",
+            measurementId: "G-25SH62MHC3"
+        };
+        const GEMINI_API_KEY = "AIzaSyAFGutl75FDpTy6zqNK_QSHEL-Lr-F7_Yo"; 
+        const firestoreAppId = 'shared-vocab-notebook-group01'; 
+        // ▲▲▲▲▲ ユーザー設定項目 (ここまで) ▲▲▲▲▲
+
+        let app, auth, db;
+        let currentLoggedInUser = null; 
+        let wordsCollectionRef = null;
+        let unsubscribeWordsListener = null;
+        let currentEditingWordId = null;
+        let lastFetchedGeminiTranslations = [];
+        let allWordsForTest = [];
+        let testWords = []; 
+        let currentQuestionIndex = 0;
+        let currentScore = 0;
+        let isTestActive = false;
+        let selectedQuestionCount = 0;
+
+        // DOM要素
+        const authContainer = document.getElementById('authContainer');
+        const mainAppContainer = document.getElementById('mainAppContainer');
+        const userEmailDisplay = document.getElementById('userEmailDisplay');
+        const loginForm = document.getElementById('loginForm');
+        const signupForm = document.getElementById('signupForm');
+        const logoutButton = document.getElementById('logoutButton');
+        const authError = document.getElementById('authError');
+        const showSignupFormButton = document.getElementById('showSignupFormButton');
+        const showLoginFormButton = document.getElementById('showLoginFormButton');
+        
+        const vocabManagementSection = document.getElementById('vocabManagementSection');
+        const wordFormSection = document.getElementById('addWordSection');
+        const wordListSection = document.getElementById('wordListSection'); 
+        const wordForm = document.getElementById('wordForm');
+        const wordInput = document.getElementById('word');
+        const meaningInput = document.getElementById('meaning');
+        const posInput = document.getElementById('pos');
+        const exampleInput = document.getElementById('example');
+        const notesInput = document.getElementById('notes');
+        const wordList = document.getElementById('wordList');
+        const searchInput = document.getElementById('searchInput');
+        const loadingIndicator = document.getElementById('loadingIndicator');
+        const geminiLoadingIndicator = document.getElementById('geminiLoadingIndicator');
+        const geminiTranslationsDisplayArea = document.getElementById('geminiTranslationsDisplayArea');
+        const weblioSearchLink = document.getElementById('weblioSearchLink');
+        const weblioSearchWordSpan = document.getElementById('weblioSearchWord');
+        const editModal = document.getElementById('editModal');
+        const editWordForm = document.getElementById('editWordForm');
+        const cancelEditButton = document.getElementById('cancelEditButton');
+        const configWarning = document.getElementById('configWarning'); 
+        const toastContainer = document.getElementById('toastContainer');
+
+        const testControlSection = document.getElementById('testControlSection'); 
+        const startTestButton = document.getElementById('startTestButton');
+        const testQuestionCountSelect = document.getElementById('testQuestionCountSelect'); 
+        const testSection = document.getElementById('testSection');
+        const testWordDisplay = document.getElementById('testWordDisplay');
+        const testAnswerInput = document.getElementById('testAnswerInput');
+        const checkAnswerButton = document.getElementById('checkAnswerButton');
+        const testFeedbackArea = document.getElementById('testFeedbackArea');
+        const nextQuestionButton = document.getElementById('nextQuestionButton');
+        const testResultArea = document.getElementById('testResultArea');
+        const endTestButton = document.getElementById('endTestButton');
+        const abortTestButton = document.getElementById('abortTestButton'); 
+        const currentQuestionInfo = document.getElementById('currentQuestionInfo');
+
+        function checkInitialConfig() { 
+            if (!firebaseConfig.apiKey || !GEMINI_API_KEY) { 
+                const message = `APIキーまたはFirebase設定がコード内で正しく設定されていません。`;
+                if(configWarning) {
+                    configWarning.textContent = message; 
+                    configWarning.classList.remove('hidden');
+                }
+                showToast(message, 'error', 10000);
+                return false;
+            }
+            if(configWarning) configWarning.classList.add('hidden');
+            return true;
+         }
+
+        function initializeFirebase() { 
+            try { app = initializeApp(firebaseConfig); auth = getAuth(app); db = getFirestore(app); return true; } 
+            catch (error) { 
+                console.error("Firebaseの初期化に失敗:", error); 
+                const fbErrorMsg = `Firebase初期化失敗: ${error.message}。`;
+                if(configWarning) {
+                    configWarning.textContent = fbErrorMsg; 
+                    configWarning.classList.remove('hidden');
+                }
+                showToast(fbErrorMsg, 'error', 10000); 
+                return false; 
+            } 
+        }
+        function setupAuthListeners() { /* (変更なし) */ onAuthStateChanged(auth, (user) => { if (user) { currentLoggedInUser = user; userEmailDisplay.textContent = `ログイン中: ${user.email}`; authContainer.classList.add('hidden'); mainAppContainer.classList.remove('hidden'); logoutButton.classList.remove('hidden'); wordsCollectionRef = collection(db, `artifacts/${firestoreAppId}/words`); loadWords(); } else { currentLoggedInUser = null; userEmailDisplay.textContent = '未ログイン'; authContainer.classList.remove('hidden'); mainAppContainer.classList.add('hidden'); logoutButton.classList.add('hidden'); if(loginForm) loginForm.reset(); if(signupForm) signupForm.reset(); if(authError) authError.textContent = ''; if (unsubscribeWordsListener) unsubscribeWordsListener(); if(wordList) wordList.innerHTML = '<p class="text-gray-500">単語帳を利用するにはログインしてください。</p>'; exitTestMode(); } toggleFormState(!!user); }); }
+        if (loginForm) { /* (変更なし) */ loginForm.addEventListener('submit', async (e) => { e.preventDefault(); const email = loginForm.loginEmail.value; const password = loginForm.loginPassword.value; if(authError) authError.textContent = ''; try { await signInWithEmailAndPassword(auth, email, password); } catch (error) { if(authError) authError.textContent = `ログインエラー: ${mapAuthErrorToJapanese(error.code)}`; showToast(`ログインエラー: ${mapAuthErrorToJapanese(error.code)}`, 'error'); } }); }
+        if (signupForm) { /* (変更なし) */ signupForm.addEventListener('submit', async (e) => { e.preventDefault(); const email = signupForm.signupEmail.value; const password = signupForm.signupPassword.value; if(authError) authError.textContent = ''; try { await createUserWithEmailAndPassword(auth, email, password); showToast('ユーザー登録が完了しました。ログインしてください。', 'success'); signupForm.reset(); loginForm.classList.remove('hidden'); signupForm.classList.add('hidden'); if(authError) authError.textContent = ''; } catch (error) { if(authError) authError.textContent = `登録エラー: ${mapAuthErrorToJapanese(error.code)}`; showToast(`登録エラー: ${mapAuthErrorToJapanese(error.code)}`, 'error'); } }); }
+        if (logoutButton) { /* (変更なし) */ logoutButton.addEventListener('click', async () => { try { await signOut(auth); } catch (error) { showToast(`ログアウトエラー: ${error.message}`, 'error'); } }); }
+        if (showSignupFormButton) { /* (変更なし) */ showSignupFormButton.addEventListener('click', () => { loginForm.classList.add('hidden'); signupForm.classList.remove('hidden'); if(authError) authError.textContent = ''; }); }
+        if (showLoginFormButton) { /* (変更なし) */ showLoginFormButton.addEventListener('click', () => { signupForm.classList.add('hidden'); loginForm.classList.remove('hidden'); if(authError) authError.textContent = ''; }); }
+        function mapAuthErrorToJapanese(errorCode) { /* (変更なし) */ switch (errorCode) { case 'auth/invalid-email': return 'メールアドレスの形式が正しくありません。'; case 'auth/user-disabled': return 'このユーザーアカウントは無効化されています。'; case 'auth/user-not-found': return 'このメールアドレスのユーザーは見つかりません。'; case 'auth/wrong-password': return 'パスワードが間違っています。'; case 'auth/email-already-in-use': return 'このメールアドレスは既に使用されています。'; case 'auth/weak-password': return 'パスワードはより強固なものにしてください。'; case 'auth/operation-not-allowed': return 'メール/パスワード認証が有効になっていません。'; case 'auth/too-many-requests': return '試行回数が多すぎます。しばらくしてから再度お試しください。'; default: return `不明なエラー (${errorCode})`; } }
+        function toggleFormState(isUserAuthenticated) { /* (変更なし) */ const formElements = [wordInput, meaningInput, posInput, exampleInput, notesInput, wordForm.querySelector('button[type="submit"]')]; formElements.forEach(el => el.disabled = !isUserAuthenticated); searchInput.disabled = !isUserAuthenticated; const term = wordInput.value.trim(); const canShowWeblioLink = isUserAuthenticated && term; weblioSearchLink.classList.toggle('hidden', !canShowWeblioLink); if (canShowWeblioLink && weblioSearchWordSpan) weblioSearchWordSpan.textContent = term; else if (weblioSearchWordSpan) weblioSearchWordSpan.textContent = ''; }
+        async function fetchTranslationsFromGemini(term) { /* (変更なし) */ if (!term) return; if (!GEMINI_API_KEY) { showToast('Gemini APIキーが設定されていません。', 'error'); if(geminiTranslationsDisplayArea) geminiTranslationsDisplayArea.innerHTML = '<p class="text-red-500 text-sm">Gemini APIキーの問題。</p>'; return; } geminiLoadingIndicator.classList.remove('hidden'); meaningInput.value = ''; posInput.value = ''; if(geminiTranslationsDisplayArea) geminiTranslationsDisplayArea.innerHTML = ''; lastFetchedGeminiTranslations = []; const prompt = `以下の英単語について、国際政治学の文脈で使われる主な日本語訳と品詞を複数挙げてください。最も一般的と思われるものを最初に、その他候補も続けてください。回答はJSON形式の配列で、各要素は {"translation": "日本語訳", "pos": "品詞 (例: 名詞, 動詞, 形容詞)"} の形式でお願いします。\n単語: ${term}`; const chatHistory = [{ role: "user", parts: [{ text: prompt }] }]; const payload = { contents: chatHistory, generationConfig: { responseMimeType: "application/json", responseSchema: { type: "ARRAY", items: { type: "OBJECT", properties: { "translation": { "type": "STRING"}, "pos": { "type": "STRING"}}, required: ["translation", "pos"]}} } }; const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`; try { const response = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); if (!response.ok) { const errorData = await response.json(); throw new Error(`Gemini APIエラー (${response.status}): ${errorData?.error?.message || response.statusText}`); } const result = await response.json(); if (result.candidates?.[0]?.content?.parts?.[0]?.text) { const translations = JSON.parse(result.candidates[0].content.parts[0].text); lastFetchedGeminiTranslations = translations; if (Array.isArray(translations) && translations.length > 0) { meaningInput.value = translations[0].translation; posInput.value = translations[0].pos; const ul = document.createElement('ul'); ul.className = 'list-disc list-inside mt-2 space-y-1 text-sm text-gray-600'; translations.forEach(item => { const li = document.createElement('li'); li.textContent = `${item.translation} (${item.pos})`; ul.appendChild(li); }); if(geminiTranslationsDisplayArea) geminiTranslationsDisplayArea.innerHTML = ''; if(geminiTranslationsDisplayArea) geminiTranslationsDisplayArea.appendChild(ul); showToast('翻訳候補を取得しました。', 'success'); } else { lastFetchedGeminiTranslations = []; throw new Error('有効な翻訳候補なし。'); } } else { lastFetchedGeminiTranslations = []; throw new Error('Gemini API応答形式不正。'); } } catch (error) { lastFetchedGeminiTranslations = []; console.error("Gemini APIエラー:", error); showToast(`Gemini APIエラー: ${error.message}`, 'error'); meaningInput.value = '取得失敗'; posInput.value = '取得失敗'; if(geminiTranslationsDisplayArea) geminiTranslationsDisplayArea.innerHTML = `<p class="text-red-500 text-sm">翻訳候補の取得失敗: ${error.message}</p>`; } finally { geminiLoadingIndicator.classList.add('hidden'); } }
+        if (wordInput) { /* (変更なし) */ wordInput.addEventListener('input', () => { const term = wordInput.value.trim(); if (term && currentLoggedInUser && weblioSearchLink && weblioSearchWordSpan) { weblioSearchLink.href = `https://ejje.weblio.jp/content/${encodeURIComponent(term)}`; weblioSearchWordSpan.textContent = term; weblioSearchLink.classList.remove('hidden'); } else if (weblioSearchLink && weblioSearchWordSpan) { weblioSearchLink.classList.add('hidden'); weblioSearchWordSpan.textContent = ''; } }); wordInput.addEventListener('blur', () => { const term = wordInput.value.trim(); if (term && currentLoggedInUser) { fetchTranslationsFromGemini(term); } else if (geminiTranslationsDisplayArea) { geminiTranslationsDisplayArea.innerHTML = '<p class="text-xs text-gray-400">単語を入力すると候補が表示されます。</p>'; meaningInput.value = ''; posInput.value = ''; lastFetchedGeminiTranslations = []; } }); }
+        async function loadWords(searchTerm = '') { /* (変更なし) */ if (!currentLoggedInUser || !wordsCollectionRef) { if(wordList) wordList.innerHTML = '<p class="text-gray-500">単語を読み込むにはログインが必要です。</p>'; loadingIndicator.classList.add('hidden'); return; } loadingIndicator.classList.remove('hidden'); if (unsubscribeWordsListener) unsubscribeWordsListener(); try { const q = query(wordsCollectionRef, orderBy("createdAt", "desc")); unsubscribeWordsListener = onSnapshot(q, (querySnapshot) => { const words = []; querySnapshot.forEach((doc) => words.push({ id: doc.id, ...doc.data() })); allWordsForTest = [...words]; displayWords(words, searchTerm); loadingIndicator.classList.add('hidden'); startTestButton.disabled = allWordsForTest.length === 0; testQuestionCountSelect.disabled = allWordsForTest.length === 0; startTestButton.title = allWordsForTest.length === 0 ? "テストできる単語がありません" : "単語テストを開始"; }, (error) => { console.error("単語取得エラー:", error); if(wordList) wordList.innerHTML = `<p class="text-red-500">単語読込エラー: ${error.message}</p>`; loadingIndicator.classList.add('hidden'); showToast(`単語読込エラー: ${error.message}`, 'error'); }); } catch (error) { console.error("リスナー設定エラー:", error); if(wordList) wordList.innerHTML = `<p class="text-red-500">リアルタイム更新設定エラー: ${error.message}</p>`; loadingIndicator.classList.add('hidden'); showToast(`リアルタイム更新設定エラー: ${error.message}`, 'error'); } }
+        function displayWords(words, searchTerm = '') { /* (変更なし) */ if (!wordList) return; wordList.innerHTML = ''; const filteredWords = words.filter(wordObj => wordObj.word.toLowerCase().includes(searchTerm.toLowerCase()) || wordObj.meaning.toLowerCase().includes(searchTerm.toLowerCase()) || (wordObj.pos && wordObj.pos.toLowerCase().includes(searchTerm.toLowerCase())) || (wordObj.example && wordObj.example.toLowerCase().includes(searchTerm.toLowerCase()))); if (filteredWords.length === 0) { wordList.innerHTML = `<p class="text-gray-500">${searchTerm ? '検索条件に一致する単語はありません。' : '登録単語はありません。'}</p>`; return; } const ul = document.createElement('ul'); ul.className = 'space-y-4'; filteredWords.forEach(wordObj => { const li = document.createElement('li'); li.className = 'p-4 bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow'; const authorInfo = wordObj.authorEmail ? `<span class="text-xs text-gray-400"> (登録者: ${escapeHtml(wordObj.authorEmail)})</span>` : ''; let otherTranslationsHtml = ''; if (wordObj.geminiAllTranslations && Array.isArray(wordObj.geminiAllTranslations) && wordObj.geminiAllTranslations.length > 0) { otherTranslationsHtml += '<div class="mt-2 pt-2 border-t border-gray-200">'; otherTranslationsHtml += '<p class="text-sm font-medium text-gray-600">その他の翻訳候補 (Gemini):</p>'; otherTranslationsHtml += '<ul class="list-disc list-inside ml-4 text-sm text-gray-500">'; wordObj.geminiAllTranslations.forEach(trans => { otherTranslationsHtml += `<li>${escapeHtml(trans.translation)} (${escapeHtml(trans.pos)})</li>`; }); otherTranslationsHtml += '</ul></div>'; } li.innerHTML = ` <div class="flex flex-col sm:flex-row justify-between items-start"> <div class="flex-grow"> <h3 class="text-lg sm:text-xl font-semibold text-indigo-600">${escapeHtml(wordObj.word)}${authorInfo}</h3> <p class="text-sm sm:text-base text-gray-700 mt-1"><strong class="font-medium">主な意味:</strong> ${escapeHtml(wordObj.meaning)}</p> ${wordObj.pos ? `<p class="text-xs sm:text-sm text-gray-600 mt-1"><strong class="font-medium">主な品詞:</strong> ${escapeHtml(wordObj.pos)}</p>` : ''} ${otherTranslationsHtml} ${wordObj.example ? `<p class="text-xs sm:text-sm text-gray-600 mt-2 pt-2 border-t border-gray-100"><strong class="font-medium">例文:</strong> ${escapeHtml(wordObj.example)}</p>` : ''} ${wordObj.notes ? `<p class="text-xs sm:text-sm text-gray-500 mt-1"><strong class="font-medium">メモ:</strong> ${escapeHtml(wordObj.notes)}</p>` : ''} <p class="text-xs text-gray-400 mt-2"> 登録日: ${wordObj.createdAt?.seconds ? new Date(wordObj.createdAt.seconds * 1000).toLocaleString() : 'N/A'} </p> </div> <div class="flex space-x-2 flex-shrink-0 ml-0 sm:ml-4 mt-3 sm:mt-0"> <button data-id="${wordObj.id}" class="edit-btn p-2 text-xs sm:text-sm bg-yellow-500 hover:bg-yellow-600 text-white rounded-md transition-colors">編集</button> <button data-id="${wordObj.id}" class="delete-btn p-2 text-xs sm:text-sm bg-red-500 hover:bg-red-600 text-white rounded-md transition-colors">削除</button> </div> </div>`; ul.appendChild(li); }); wordList.appendChild(ul); document.querySelectorAll('.edit-btn').forEach(button => button.addEventListener('click', handleEdit)); document.querySelectorAll('.delete-btn').forEach(button => button.addEventListener('click', handleDelete)); }
+        function escapeHtml(unsafe) { /* (変更なし) */ return String(unsafe ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); }
+        if (wordForm) { /* (変更なし) */ wordForm.addEventListener('submit', async (e) => { e.preventDefault(); if (!checkAllConfigsAndAuth()) return; const word = wordInput.value.trim(); const meaning = meaningInput.value.trim(); const pos = posInput.value.trim(); const example = exampleInput.value.trim(); const notes = notesInput.value.trim(); if (!word || !meaning) { showToast('単語と主な意味は必須です。', 'warning'); return; } try { const newWord = { word, meaning, pos, example, notes, authorEmail: currentLoggedInUser.email, authorUid: currentLoggedInUser.uid, geminiAllTranslations: lastFetchedGeminiTranslations, createdAt: serverTimestamp(), updatedAt: serverTimestamp() }; await addDoc(wordsCollectionRef, newWord); wordForm.reset(); if (geminiTranslationsDisplayArea) geminiTranslationsDisplayArea.innerHTML = '<p class="text-xs text-gray-400">単語を入力すると候補が表示されます。</p>'; lastFetchedGeminiTranslations = []; if (weblioSearchLink) weblioSearchLink.classList.add('hidden'); if (weblioSearchWordSpan) weblioSearchWordSpan.textContent = ''; showToast('単語を登録しました。', 'success'); } catch (error) { console.error("単語登録エラー:", error); showToast(`単語登録エラー: ${error.message}`, 'error'); } }); }
+        async function handleEdit(e) { /* (変更なし) */ if (!checkAllConfigsAndAuth()) return; currentEditingWordId = e.target.dataset.id; if (!currentEditingWordId) { showToast('編集対象ID不明。', 'error'); return; } try { const wordDocRef = doc(wordsCollectionRef, currentEditingWordId); const docSnap = await getDoc(wordDocRef); if (docSnap.exists()) { const data = docSnap.data(); document.getElementById('editWord').value = data.word; document.getElementById('editMeaning').value = data.meaning; document.getElementById('editPos').value = data.pos || ''; document.getElementById('editExample').value = data.example || ''; document.getElementById('editNotes').value = data.notes || ''; editModal.classList.remove('hidden'); } else { showToast('編集対象の単語が見つかりません。', 'error'); } } catch (error) { console.error("編集データ取得エラー:", error); showToast(`編集データ取得エラー: ${error.message}`, 'error'); } }
+        if (editWordForm) { /* (変更なし) */ editWordForm.addEventListener('submit', async (e) => { e.preventDefault(); if (!checkAllConfigsAndAuth() || !currentEditingWordId) { showToast('更新に必要な情報不足。', 'error'); return; } const updatedWordData = { word: document.getElementById('editWord').value.trim(), meaning: document.getElementById('editMeaning').value.trim(), pos: document.getElementById('editPos').value.trim(), example: document.getElementById('editExample').value.trim(), notes: document.getElementById('editNotes').value.trim(), updatedAt: serverTimestamp() }; if (!updatedWordData.word || !updatedWordData.meaning) { showToast('単語と意味は必須です。', 'warning'); return; } try { const wordDocRef = doc(wordsCollectionRef, currentEditingWordId); await updateDoc(wordDocRef, updatedWordData); closeEditModal(); showToast('単語を更新しました。', 'success'); } catch (error) { console.error("単語更新エラー:", error); showToast(`単語更新エラー: ${error.message}`, 'error'); } }); }
+        if (cancelEditButton) cancelEditButton.addEventListener('click', closeEditModal);
+        function closeEditModal() { /* (変更なし) */ if(editModal) editModal.classList.add('hidden'); if(editWordForm) editWordForm.reset(); currentEditingWordId = null; }
+        async function handleDelete(e) { /* (変更なし) */ if (!checkAllConfigsAndAuth()) return; const wordId = e.target.dataset.id; if (!wordId) { showToast('削除対象ID不明。', 'error'); return; } const wordText = e.target.closest('li')?.querySelector('h3')?.textContent.split(' (登録者:')[0] || 'この単語'; if (confirm(`単語「${wordText}」を削除してもよろしいですか？`)) { try { const wordDocRef = doc(wordsCollectionRef, wordId); await deleteDoc(wordDocRef); showToast('単語を削除しました。', 'success'); } catch (error) { console.error("単語削除エラー:", error); showToast(`単語削除エラー: ${error.message}`, 'error'); } } }
+        if (searchInput) searchInput.addEventListener('input', (e) => { if (currentLoggedInUser) loadWords(e.target.value.trim()); });
+        function showToast(message, type = 'info', duration = 3000) { /* (変更なし) */ if (!toastContainer) return; const toast = document.createElement('div'); toast.className = `p-3 rounded-md shadow-lg text-white mb-2 transition-all duration-500 ease-in-out transform opacity-0 translate-y-2 ${type === 'success' ? 'bg-green-500' : type === 'error' ? 'bg-red-500' : type === 'warning' ? 'bg-yellow-500' : 'bg-blue-500'}`; toast.textContent = message; toastContainer.prepend(toast); setTimeout(() => { toast.classList.remove('opacity-0', 'translate-y-2'); toast.classList.add('opacity-100', 'translate-y-0'); }, 10); setTimeout(() => { toast.classList.remove('opacity-100', 'translate-y-0'); toast.classList.add('opacity-0', 'translate-y-2'); setTimeout(() => { if (toast.parentNode) { toast.remove(); } }, 500); }, duration); }
+        function checkAllConfigsAndAuth() { /* (変更なし) */ if (!checkInitialConfig()) return false; if (!currentLoggedInUser || !wordsCollectionRef) { showToast('ログインしていません。操作を実行できません。', 'error'); return false; } return true; }
+        
+        // --- 単語テスト機能 ---
+        if (startTestButton) { /* (変更なし) */ startTestButton.addEventListener('click', () => { if (allWordsForTest.length === 0) { showToast("テストできる単語がありません。先に単語を登録してください。", "warning"); return; } const countOption = testQuestionCountSelect.value; let numQuestions; if (countOption === 'all') { numQuestions = allWordsForTest.length; } else { numQuestions = parseInt(countOption, 10); } if (isNaN(numQuestions) || numQuestions <= 0) { showToast("問題数を選択してください。", "warning"); return; } selectedQuestionCount = Math.min(numQuestions, allWordsForTest.length); if (selectedQuestionCount === 0) { showToast("テストできる単語がありません。", "warning"); return; } isTestActive = true; vocabManagementSection.classList.add('hidden'); testSection.classList.remove('hidden'); testControlSection.classList.add('hidden'); abortTestButton.classList.remove('hidden'); let tempTestWords = [...allWordsForTest]; for (let i = tempTestWords.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [tempTestWords[i], tempTestWords[j]] = [tempTestWords[j], tempTestWords[i]]; } testWords = tempTestWords.slice(0, selectedQuestionCount); currentQuestionIndex = 0; currentScore = 0; testResultArea.innerHTML = ''; displayNextQuestion(); }); }
+        function displayNextQuestion() { /* (変更なし) */ if (currentQuestionIndex < testWords.length) { const wordData = testWords[currentQuestionIndex]; testWordDisplay.textContent = wordData.word; testAnswerInput.value = ''; testFeedbackArea.innerHTML = ''; checkAnswerButton.disabled = false; testAnswerInput.disabled = false; testAnswerInput.focus(); nextQuestionButton.classList.add('hidden'); endTestButton.classList.add('hidden'); abortTestButton.classList.remove('hidden'); currentQuestionInfo.textContent = `${currentQuestionIndex + 1} / ${testWords.length} 問目`; } else { showTestResults(); } }
+
+        if (checkAnswerButton) {
+            checkAnswerButton.addEventListener('click', () => {
+                if (!isTestActive || currentQuestionIndex >= testWords.length) return;
+
+                const userAnswer = testAnswerInput.value.trim().toLowerCase(); 
+                const currentWordData = testWords[currentQuestionIndex];
+                const mainMeaning = currentWordData.meaning.trim().toLowerCase();
+                
+                let isCorrect = false;
+                if (userAnswer === mainMeaning) {
+                    isCorrect = true;
+                }
+                if (!isCorrect && currentWordData.geminiAllTranslations && Array.isArray(currentWordData.geminiAllTranslations)) {
+                    for (const trans of currentWordData.geminiAllTranslations) {
+                        if (trans.translation && userAnswer === trans.translation.trim().toLowerCase()) {
+                            isCorrect = true;
+                            break; 
+                        }
+                    }
+                }
+
+                let feedbackHtml = '';
+                if (isCorrect) {
+                    feedbackHtml = '<p class="text-green-600 font-semibold">正解！</p>';
+                    currentScore++;
+                } else {
+                    feedbackHtml = `<p class="text-red-600 font-semibold">不正解...</p>`;
+                }
+                // ★修正: 正解・不正解に関わらず正答例を表示
+                feedbackHtml += `<div class="mt-2 text-sm text-gray-700">`;
+                feedbackHtml += `<p class="font-medium">正解例:</p>`;
+                feedbackHtml += `<ul class="list-disc list-inside ml-4 text-gray-600">`;
+                feedbackHtml += `<li><strong>主な意味:</strong> ${escapeHtml(currentWordData.meaning)}</li>`;
+                if (currentWordData.geminiAllTranslations && Array.isArray(currentWordData.geminiAllTranslations) && currentWordData.geminiAllTranslations.length > 0) {
+                    currentWordData.geminiAllTranslations.forEach(trans => {
+                        // 主な意味と全く同じものは表示しない（ただし品詞が異なる場合は表示しても良いかもしれないが、今回は単純化）
+                        if (trans.translation.trim().toLowerCase() !== mainMeaning) { 
+                            feedbackHtml += `<li>${escapeHtml(trans.translation)} (${escapeHtml(trans.pos)})</li>`;
+                        } else if (trans.pos.trim().toLowerCase() !== (currentWordData.pos || "").trim().toLowerCase()) {
+                            // 主な意味と同じでも品詞が異なれば表示する（オプション）
+                             feedbackHtml += `<li>${escapeHtml(trans.translation)} (${escapeHtml(trans.pos)})</li>`;
+                        }
+                    });
+                }
+                feedbackHtml += `</ul></div>`;
+                testFeedbackArea.innerHTML = feedbackHtml;
+
+                checkAnswerButton.disabled = true;
+                testAnswerInput.disabled = true;
+                nextQuestionButton.classList.remove('hidden');
+                abortTestButton.classList.add('hidden'); 
+
+                if (currentQuestionIndex >= testWords.length -1) {
+                    nextQuestionButton.textContent = "結果を見る";
+                } else {
+                    nextQuestionButton.textContent = "次の問題へ";
+                }
+            });
+        }
+        
+        if (testAnswerInput) { /* (変更なし) */ testAnswerInput.addEventListener('keypress', function(event) { if (event.key === 'Enter' && !checkAnswerButton.disabled) { event.preventDefault(); checkAnswerButton.click(); } }); }
+        if (nextQuestionButton) { /* (変更なし) */ nextQuestionButton.addEventListener('click', () => { currentQuestionIndex++; displayNextQuestion(); }); }
+        function showTestResults() { /* (変更なし) */ testWordDisplay.textContent = 'テスト終了！'; currentQuestionInfo.textContent = ''; testAnswerInput.value = ''; testAnswerInput.classList.add('hidden'); checkAnswerButton.classList.add('hidden'); testFeedbackArea.innerHTML = ''; nextQuestionButton.classList.add('hidden'); abortTestButton.classList.add('hidden'); const percentage = testWords.length > 0 ? Math.round((currentScore / testWords.length) * 100) : 0; testResultArea.innerHTML = ` <h3 class="text-lg font-semibold">テスト結果</h3> <p>${testWords.length} 問中 ${currentScore} 問正解でした。</p> <p>正解率: ${percentage}%</p> `; endTestButton.classList.remove('hidden'); }
+        function exitTestMode() { /* (変更なし) */ isTestActive = false; if (testSection) testSection.classList.add('hidden'); if (vocabManagementSection) vocabManagementSection.classList.remove('hidden'); if (testControlSection) testControlSection.classList.remove('hidden'); if (abortTestButton) abortTestButton.classList.add('hidden'); if (testAnswerInput) testAnswerInput.classList.remove('hidden'); if (checkAnswerButton) checkAnswerButton.classList.remove('hidden'); if (nextQuestionButton) { nextQuestionButton.textContent = "次の問題へ"; nextQuestionButton.classList.add('hidden'); } if (endTestButton) endTestButton.classList.add('hidden'); if (testResultArea) testResultArea.innerHTML = ''; if (testFeedbackArea) testFeedbackArea.innerHTML = ''; if (testWordDisplay) testWordDisplay.textContent = 'ここに問題の単語が表示されます'; if (currentQuestionInfo) currentQuestionInfo.textContent = ''; }
+        if (endTestButton) { /* (変更なし) */ endTestButton.addEventListener('click', exitTestMode); }
+        if (abortTestButton) { /* (変更なし) */ abortTestButton.addEventListener('click', () => { if (confirm("テストを中断しますか？進行状況は保存されません。")) { exitTestMode(); } }); }
+
+        document.addEventListener('DOMContentLoaded', async () => {
+            if (checkInitialConfig()) { 
+                if (initializeFirebase()) {
+                    setupAuthListeners(); 
+                }
+            }
+            toggleFormState(false); 
+            if (loginForm && signupForm) {
+                loginForm.classList.remove('hidden');
+                signupForm.classList.add('hidden');
+            }
+            if (testSection) testSection.classList.add('hidden'); 
+            if (startTestButton) startTestButton.disabled = true; 
+            if (testQuestionCountSelect) testQuestionCountSelect.disabled = true; 
+            if (abortTestButton) abortTestButton.classList.add('hidden'); 
+        });
+    </script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
+        .modal-overlay { background-color: rgba(0, 0, 0, 0.5); }
+        #toastContainer { position: fixed; top: 1.25rem; right: 1.25rem; width: calc(100% - 2.5rem); sm:width: 100%; max-width: 24rem; z-index: 100; display: flex; flex-direction: column; gap: 0.5rem; }
+        #configWarning { white-space: pre-wrap; } 
+        .input-field { margin-top: 0.25rem; display: block; width: 100%; padding-left: 0.75rem; padding-right: 0.75rem; padding-top: 0.5rem; padding-bottom: 0.5rem; border-width: 1px; border-color: #D1D5DB; border-radius: 0.375rem; box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); outline: 2px solid transparent; outline-offset: 2px; }
+        .input-field:focus { ring-color: #6366F1; border-color: #6366F1; }
+        .btn-primary { padding-left: 1rem; padding-right: 1rem; padding-top: 0.5rem; padding-bottom: 0.5rem; background-color: #4F46E5; color: white; font-weight: 600; border-radius: 0.375rem; box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); }
+        .btn-primary:hover { background-color: #4338CA; }
+        .btn-secondary { padding-left: 1rem; padding-right: 1rem; padding-top: 0.5rem; padding-bottom: 0.5rem; background-color: #E5E7EB; color: #374151; font-weight: 500; border-radius: 0.375rem; }
+        .btn-secondary:hover { background-color: #D1D5DB; }
+        .btn-test { padding-left: 1rem; padding-right: 1rem; padding-top: 0.5rem; padding-bottom: 0.5rem; font-weight: 600; border-radius: 0.375rem; box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); transition: background-color 0.2s; }
+    </style>
+</head>
+<body class="antialiased">
+    <div id="configWarning" class="hidden p-4 mb-4 text-sm text-red-700 bg-red-100 rounded-lg dark:bg-red-200 dark:text-red-800" role="alert">
+        </div>
+
+    <div id="authContainer" class="container mx-auto p-4 sm:p-6 lg:p-8 max-w-md">
+        <header class="mb-8 text-center"><h1 class="text-xl sm:text-2xl font-bold text-indigo-700">単語帳へようこそ</h1></header>
+        <form id="loginForm" class="bg-white p-6 rounded-lg shadow-lg space-y-4 hidden"> <h2 class="text-lg sm:text-xl font-semibold text-gray-800 mb-3">ログイン</h2> <div> <label for="loginEmail" class="block text-sm font-medium text-gray-700">メールアドレス</label> <input type="email" id="loginEmail" name="loginEmail" required class="input-field"> </div> <div> <label for="loginPassword" class="block text-sm font-medium text-gray-700">パスワード</label> <input type="password" id="loginPassword" name="loginPassword" required class="input-field"> </div> <button type="submit" class="w-full btn-primary text-sm sm:text-base">ログイン</button> <p class="text-xs sm:text-sm text-center text-gray-600"> アカウントをお持ちでないですか？ <button type="button" id="showSignupFormButton" class="font-medium text-indigo-600 hover:text-indigo-500">新規登録</button> </p> </form>
+        <form id="signupForm" class="bg-white p-6 rounded-lg shadow-lg space-y-4 hidden"> <h2 class="text-lg sm:text-xl font-semibold text-gray-800 mb-3">新規登録</h2> <div> <label for="signupEmail" class="block text-sm font-medium text-gray-700">メールアドレス</label> <input type="email" id="signupEmail" name="signupEmail" required class="input-field"> </div> <div> <label for="signupPassword" class="block text-sm font-medium text-gray-700">パスワード</label> <input type="password" id="signupPassword" name="signupPassword" required class="input-field"> </div> <button type="submit" class="w-full px-4 py-2 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-md shadow-sm text-sm sm:text-base">登録する</button> <p class="text-xs sm:text-sm text-center text-gray-600"> 既にアカウントをお持ちですか？ <button type="button" id="showLoginFormButton" class="font-medium text-indigo-600 hover:text-indigo-500">ログイン</button> </p> </form>
+        <p id="authError" class="mt-3 text-center text-sm text-red-600"></p>
+    </div>
+
+    <div id="mainAppContainer" class="hidden container mx-auto p-4 sm:p-6 lg:p-8 max-w-4xl">
+        <header class="mb-6 sm:mb-8 text-center">
+            <h1 class="text-2xl sm:text-3xl lg:text-4xl font-bold text-indigo-700">国際政治学・玉置ゼミ用英単語帳</h1>
+            <div class="mt-2 flex flex-col sm:flex-row justify-center items-center space-y-2 sm:space-y-0 sm:space-x-4">
+                <span id="userEmailDisplay" class="text-xs sm:text-sm text-gray-600">未ログイン</span>
+                <button id="logoutButton" class="px-3 py-1 text-xs sm:text-sm bg-red-500 hover:bg-red-600 text-white font-semibold rounded-md shadow-sm hidden">ログアウト</button>
+            </div>
+        </header>
+
+        <div id="vocabManagementSection">
+            <section id="addWordSection" class="mb-6 sm:mb-8 p-4 sm:p-6 bg-white rounded-lg shadow-lg">
+                <h2 class="text-xl sm:text-2xl font-semibold text-gray-800 mb-4">新しい単語を登録</h2> <form id="wordForm" class="space-y-4"> <div> <label for="word" class="block text-sm font-medium text-gray-700">単語 <span class="text-red-500">*</span></label> <input type="text" id="word" name="word" required class="input-field text-sm sm:text-base" placeholder="例: sovereignty"> <div id="weblioSearchLinkContainer" class="mt-2"> <a id="weblioSearchLink" href="#" target="_blank" class="text-xs sm:text-sm text-blue-600 hover:text-blue-800 hover:underline hidden"> Weblioで「<span id="weblioSearchWord"></span>」を検索 </a> </div> <div id="geminiLoadingIndicator" class="mt-2 text-xs sm:text-sm text-indigo-600 hidden items-center"> <svg class="animate-spin h-4 w-4 sm:h-5 sm:w-5 mr-2 text-indigo-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> <span>Gemini翻訳候補取得中...</span> </div> </div> <div> <label for="meaning" class="block text-sm font-medium text-gray-700">主な意味 (Gemini自動入力) <span class="text-red-500">*</span></label> <input type="text" id="meaning" name="meaning" required class="input-field text-sm sm:text-base bg-gray-50" placeholder="単語入力後、自動入力"> </div> <div> <label for="pos" class="block text-sm font-medium text-gray-700">主な品詞 (Gemini自動入力)</label> <input type="text" id="pos" name="pos" class="input-field text-sm sm:text-base bg-gray-50" placeholder="単語入力後、自動入力"> </div> <div> <label class="block text-sm font-medium text-gray-700">その他の翻訳候補 (from Gemini)</label> <div id="geminiTranslationsDisplayArea" class="mt-1 p-2 sm:p-3 border border-gray-200 rounded-md bg-gray-50 min-h-[50px] sm:min-h-[60px] text-xs sm:text-sm"> <p class="text-xs text-gray-400">単語入力で候補表示</p> </div> </div> <div> <label for="example" class="block text-sm font-medium text-gray-700">例文</label> <textarea id="example" name="example" rows="2" sm:rows="3" class="input-field text-sm sm:text-base"></textarea> </div> <div> <label for="notes" class="block text-sm font-medium text-gray-700">メモ</label> <textarea id="notes" name="notes" rows="2" class="input-field text-sm sm:text-base"></textarea> </div> <button type="submit" class="w-full sm:w-auto btn-primary text-sm sm:text-base">登録</button> </form>
+            </section>
+
+            <section id="wordListSection" class="p-4 sm:p-6 bg-white rounded-lg shadow-lg">
+                 <div class="flex flex-col sm:flex-row justify-between items-center mb-4 sm:mb-6 gap-3 sm:gap-4">
+                    <h2 class="text-xl sm:text-2xl font-semibold text-gray-800">登録単語リスト (共有)</h2>
+                    <input type="text" id="searchInput" class="w-full sm:w-auto md:w-64 px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 text-sm sm:text-base" placeholder="検索...">
+                </div>
+                <div id="loadingIndicator" class="text-center py-4 hidden">
+                    <svg class="animate-spin h-6 w-6 sm:h-8 sm:w-8 text-indigo-600 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                    <p class="text-xs sm:text-sm text-gray-500 mt-2">読込中...</p>
+                </div>
+                <div id="wordList">
+                    <p class="text-sm sm:text-base text-gray-500">単語を登録するか、検索してください。</p>
+                </div>
+            </section>
+        </div>
+
+        <section id="testSection" class="hidden mt-6 sm:mt-8 p-4 sm:p-6 bg-white rounded-lg shadow-lg">
+            <h2 class="text-xl sm:text-2xl font-semibold text-gray-800 mb-4 sm:mb-6 text-center">単語テスト</h2>
+            <div id="currentQuestionInfo" class="text-center text-sm sm:text-base text-gray-600 mb-3 sm:mb-4"></div>
+            <div id="testWordDisplay" class="text-2xl sm:text-3xl font-bold text-indigo-700 mb-4 sm:mb-6 p-3 sm:p-4 bg-indigo-50 rounded-md text-center min-h-[70px] sm:min-h-[80px] flex items-center justify-center">
+                ここに問題の単語が表示されます
+            </div>
+            <div class="mb-4">
+                <label for="testAnswerInput" class="block text-sm font-medium text-gray-700 mb-1">日本語訳を入力してください:</label>
+                <textarea id="testAnswerInput" rows="2" class="input-field w-full p-2 border border-gray-300 rounded-md focus:ring-indigo-500 focus:border-indigo-500 text-sm sm:text-base" placeholder="回答を入力..."></textarea>
+            </div>
+            <button id="checkAnswerButton" class="w-full btn-test bg-blue-500 hover:bg-blue-600 text-white mb-3 sm:mb-4 text-sm sm:text-base">回答を確認</button>
+            <div id="testFeedbackArea" class="mb-3 sm:mb-4 min-h-[40px] sm:min-h-[50px] text-sm sm:text-base">
+                </div>
+            <button id="nextQuestionButton" class="w-full btn-test bg-green-500 hover:bg-green-600 text-white mb-3 sm:mb-4 hidden text-sm sm:text-base">次の問題へ</button>
+            <div id="testResultArea" class="mt-4 sm:mt-6 p-3 sm:p-4 bg-gray-100 rounded-md text-sm sm:text-base">
+                </div>
+            <div class="mt-4 sm:mt-6 space-y-2 sm:space-y-0 sm:flex sm:space-x-3">
+                <button id="abortTestButton" class="w-full sm:w-auto btn-test bg-yellow-500 hover:bg-yellow-600 text-white hidden text-sm sm:text-base">テストを中断する</button>
+                <button id="endTestButton" class="w-full sm:w-auto btn-test bg-gray-500 hover:bg-gray-600 text-white hidden text-sm sm:text-base">テストを終了して一覧に戻る</button>
+            </div>
+        </section>
+        
+        <div id="testControlSection" class="mt-6 sm:mt-8 p-4 sm:p-6 bg-white rounded-lg shadow-md text-center">
+            <h2 class="text-lg sm:text-xl font-semibold text-gray-800 mb-4">単語テストに挑戦！</h2>
+            <div class="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4">
+                <div>
+                    <label for="testQuestionCountSelect" class="sr-only">問題数を選択:</label>
+                    <select id="testQuestionCountSelect" class="input-field text-sm sm:text-base py-2 px-3 rounded-md border-gray-300 shadow-sm focus:border-indigo-300 focus:ring focus:ring-indigo-200 focus:ring-opacity-50 disabled:opacity-50">
+                        <option value="10">10問</option>
+                        <option value="20">20問</option>
+                        <option value="50">50問</option>
+                        <option value="100">100問</option>
+                        <option value="all">全問</option>
+                    </select>
+                </div>
+                <button id="startTestButton" class="w-full sm:w-auto btn-test bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 sm:px-6 sm:py-3 text-sm sm:text-base rounded-lg shadow-md disabled:opacity-50 disabled:cursor-not-allowed" title="テストできる単語がありません">
+                    テスト開始
+                </button>
+            </div>
+        </div>
+
+    </div>
+
+    <div id="editModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 modal-overlay hidden"> <div class="bg-white p-4 sm:p-6 rounded-lg shadow-xl w-full max-w-md sm:max-w-lg max-h-[90vh] overflow-y-auto"> <h3 class="text-lg sm:text-xl font-semibold mb-4 text-gray-800">単語を編集</h3> <form id="editWordForm" class="space-y-4"> <div><label for="editWord" class="block text-sm font-medium text-gray-700">単語 <span class="text-red-500">*</span></label><input type="text" id="editWord" name="editWord" required class="input-field text-sm sm:text-base"></div> <div><label for="editMeaning" class="block text-sm font-medium text-gray-700">意味 <span class="text-red-500">*</span></label><input type="text" id="editMeaning" name="editMeaning" required class="input-field text-sm sm:text-base"></div> <div><label for="editPos" class="block text-sm font-medium text-gray-700">品詞</label><input type="text" id="editPos" name="editPos" class="input-field text-sm sm:text-base"></div> <div><label for="editExample" class="block text-sm font-medium text-gray-700">例文</label><textarea id="editExample" name="editExample" rows="2 sm:rows="3" class="input-field text-sm sm:text-base"></textarea></div> <div><label for="editNotes" class="block text-sm font-medium text-gray-700">メモ</label><textarea id="editNotes" name="editNotes" rows="2" class="input-field text-sm sm:text-base"></textarea></div> <div class="flex flex-col sm:flex-row justify-end space-y-2 sm:space-y-0 sm:space-x-3 mt-6"> <button type="button" id="cancelEditButton" class="w-full sm:w-auto btn-secondary text-sm sm:text-base">キャンセル</button> <button type="submit" class="w-full sm:w-auto btn-primary text-sm sm:text-base">更新</button> </div> </form> </div> </div>
+    
+    <div id="toastContainer"></div>
+
+    <style> 
+        body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; }
+        .modal-overlay { background-color: rgba(0, 0, 0, 0.5); }
+        #toastContainer { position: fixed; top: 1.25rem; right: 1.25rem; width: calc(100% - 2.5rem); sm:width: 100%; max-width: 24rem; z-index: 100; display: flex; flex-direction: column; gap: 0.5rem; }
+        #configWarning { white-space: pre-wrap; } 
+        .input-field { margin-top: 0.25rem; display: block; width: 100%; padding-left: 0.75rem; padding-right: 0.75rem; padding-top: 0.5rem; padding-bottom: 0.5rem; border-width: 1px; border-color: #D1D5DB; border-radius: 0.375rem; box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); outline: 2px solid transparent; outline-offset: 2px; }
+        .input-field:focus { ring-color: #6366F1; border-color: #6366F1; }
+        .btn-primary { padding-left: 1rem; padding-right: 1rem; padding-top: 0.5rem; padding-bottom: 0.5rem; background-color: #4F46E5; color: white; font-weight: 600; border-radius: 0.375rem; box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); }
+        .btn-primary:hover { background-color: #4338CA; }
+        .btn-secondary { padding-left: 1rem; padding-right: 1rem; padding-top: 0.5rem; padding-bottom: 0.5rem; background-color: #E5E7EB; color: #374151; font-weight: 500; border-radius: 0.375rem; }
+        .btn-secondary:hover { background-color: #D1D5DB; }
+        .btn-test { padding-left: 1rem; padding-right: 1rem; padding-top: 0.5rem; padding-bottom: 0.5rem; font-weight: 600; border-radius: 0.375rem; box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); transition: background-color 0.2s; }
+    </style>
+</body>
+</html>
