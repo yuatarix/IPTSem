@@ -105,33 +105,8 @@
         const abortTestButton = document.getElementById('abortTestButton'); 
         const currentQuestionInfo = document.getElementById('currentQuestionInfo');
 
-        function checkInitialConfig() { 
-            if (!firebaseConfig.apiKey || !GEMINI_API_KEY) { 
-                const message = `APIキーまたはFirebase設定がコード内で正しく設定されていません。`;
-                if(configWarning) {
-                    configWarning.textContent = message; 
-                    configWarning.classList.remove('hidden');
-                }
-                showToast(message, 'error', 10000);
-                return false;
-            }
-            if(configWarning) configWarning.classList.add('hidden');
-            return true;
-         }
-
-        function initializeFirebase() { 
-            try { app = initializeApp(firebaseConfig); auth = getAuth(app); db = getFirestore(app); return true; } 
-            catch (error) { 
-                console.error("Firebaseの初期化に失敗:", error); 
-                const fbErrorMsg = `Firebase初期化失敗: ${error.message}。`;
-                if(configWarning) {
-                    configWarning.textContent = fbErrorMsg; 
-                    configWarning.classList.remove('hidden');
-                }
-                showToast(fbErrorMsg, 'error', 10000); 
-                return false; 
-            } 
-        }
+        function checkInitialConfig() { /* (固定設定のため簡略化) */ if (!firebaseConfig.apiKey || !GEMINI_API_KEY) { const message = `APIキーまたはFirebase設定がコード内で正しく設定されていません。`; if(configWarning) { configWarning.textContent = message; configWarning.classList.remove('hidden');} showToast(message, 'error', 10000); return false; } if(configWarning) configWarning.classList.add('hidden'); return true; }
+        function initializeFirebase() { /* (変更なし) */ try { app = initializeApp(firebaseConfig); auth = getAuth(app); db = getFirestore(app); return true; } catch (error) { console.error("Firebaseの初期化に失敗:", error); const fbErrorMsg = `Firebase初期化失敗: ${error.message}。`; if(configWarning) { configWarning.textContent = fbErrorMsg; configWarning.classList.remove('hidden');} showToast(fbErrorMsg, 'error', 10000); return false; } }
         function setupAuthListeners() { /* (変更なし) */ onAuthStateChanged(auth, (user) => { if (user) { currentLoggedInUser = user; userEmailDisplay.textContent = `ログイン中: ${user.email}`; authContainer.classList.add('hidden'); mainAppContainer.classList.remove('hidden'); logoutButton.classList.remove('hidden'); wordsCollectionRef = collection(db, `artifacts/${firestoreAppId}/words`); loadWords(); } else { currentLoggedInUser = null; userEmailDisplay.textContent = '未ログイン'; authContainer.classList.remove('hidden'); mainAppContainer.classList.add('hidden'); logoutButton.classList.add('hidden'); if(loginForm) loginForm.reset(); if(signupForm) signupForm.reset(); if(authError) authError.textContent = ''; if (unsubscribeWordsListener) unsubscribeWordsListener(); if(wordList) wordList.innerHTML = '<p class="text-gray-500">単語帳を利用するにはログインしてください。</p>'; exitTestMode(); } toggleFormState(!!user); }); }
         if (loginForm) { /* (変更なし) */ loginForm.addEventListener('submit', async (e) => { e.preventDefault(); const email = loginForm.loginEmail.value; const password = loginForm.loginPassword.value; if(authError) authError.textContent = ''; try { await signInWithEmailAndPassword(auth, email, password); } catch (error) { if(authError) authError.textContent = `ログインエラー: ${mapAuthErrorToJapanese(error.code)}`; showToast(`ログインエラー: ${mapAuthErrorToJapanese(error.code)}`, 'error'); } }); }
         if (signupForm) { /* (変更なし) */ signupForm.addEventListener('submit', async (e) => { e.preventDefault(); const email = signupForm.signupEmail.value; const password = signupForm.signupPassword.value; if(authError) authError.textContent = ''; try { await createUserWithEmailAndPassword(auth, email, password); showToast('ユーザー登録が完了しました。ログインしてください。', 'success'); signupForm.reset(); loginForm.classList.remove('hidden'); signupForm.classList.add('hidden'); if(authError) authError.textContent = ''; } catch (error) { if(authError) authError.textContent = `登録エラー: ${mapAuthErrorToJapanese(error.code)}`; showToast(`登録エラー: ${mapAuthErrorToJapanese(error.code)}`, 'error'); } }); }
@@ -145,7 +120,56 @@
         async function loadWords(searchTerm = '') { /* (変更なし) */ if (!currentLoggedInUser || !wordsCollectionRef) { if(wordList) wordList.innerHTML = '<p class="text-gray-500">単語を読み込むにはログインが必要です。</p>'; loadingIndicator.classList.add('hidden'); return; } loadingIndicator.classList.remove('hidden'); if (unsubscribeWordsListener) unsubscribeWordsListener(); try { const q = query(wordsCollectionRef, orderBy("createdAt", "desc")); unsubscribeWordsListener = onSnapshot(q, (querySnapshot) => { const words = []; querySnapshot.forEach((doc) => words.push({ id: doc.id, ...doc.data() })); allWordsForTest = [...words]; displayWords(words, searchTerm); loadingIndicator.classList.add('hidden'); startTestButton.disabled = allWordsForTest.length === 0; testQuestionCountSelect.disabled = allWordsForTest.length === 0; startTestButton.title = allWordsForTest.length === 0 ? "テストできる単語がありません" : "単語テストを開始"; }, (error) => { console.error("単語取得エラー:", error); if(wordList) wordList.innerHTML = `<p class="text-red-500">単語読込エラー: ${error.message}</p>`; loadingIndicator.classList.add('hidden'); showToast(`単語読込エラー: ${error.message}`, 'error'); }); } catch (error) { console.error("リスナー設定エラー:", error); if(wordList) wordList.innerHTML = `<p class="text-red-500">リアルタイム更新設定エラー: ${error.message}</p>`; loadingIndicator.classList.add('hidden'); showToast(`リアルタイム更新設定エラー: ${error.message}`, 'error'); } }
         function displayWords(words, searchTerm = '') { /* (変更なし) */ if (!wordList) return; wordList.innerHTML = ''; const filteredWords = words.filter(wordObj => wordObj.word.toLowerCase().includes(searchTerm.toLowerCase()) || wordObj.meaning.toLowerCase().includes(searchTerm.toLowerCase()) || (wordObj.pos && wordObj.pos.toLowerCase().includes(searchTerm.toLowerCase())) || (wordObj.example && wordObj.example.toLowerCase().includes(searchTerm.toLowerCase()))); if (filteredWords.length === 0) { wordList.innerHTML = `<p class="text-gray-500">${searchTerm ? '検索条件に一致する単語はありません。' : '登録単語はありません。'}</p>`; return; } const ul = document.createElement('ul'); ul.className = 'space-y-4'; filteredWords.forEach(wordObj => { const li = document.createElement('li'); li.className = 'p-4 bg-white border border-gray-200 rounded-lg shadow-sm hover:shadow-md transition-shadow'; const authorInfo = wordObj.authorEmail ? `<span class="text-xs text-gray-400"> (登録者: ${escapeHtml(wordObj.authorEmail)})</span>` : ''; let otherTranslationsHtml = ''; if (wordObj.geminiAllTranslations && Array.isArray(wordObj.geminiAllTranslations) && wordObj.geminiAllTranslations.length > 0) { otherTranslationsHtml += '<div class="mt-2 pt-2 border-t border-gray-200">'; otherTranslationsHtml += '<p class="text-sm font-medium text-gray-600">その他の翻訳候補 (Gemini):</p>'; otherTranslationsHtml += '<ul class="list-disc list-inside ml-4 text-sm text-gray-500">'; wordObj.geminiAllTranslations.forEach(trans => { otherTranslationsHtml += `<li>${escapeHtml(trans.translation)} (${escapeHtml(trans.pos)})</li>`; }); otherTranslationsHtml += '</ul></div>'; } li.innerHTML = ` <div class="flex flex-col sm:flex-row justify-between items-start"> <div class="flex-grow"> <h3 class="text-lg sm:text-xl font-semibold text-indigo-600">${escapeHtml(wordObj.word)}${authorInfo}</h3> <p class="text-sm sm:text-base text-gray-700 mt-1"><strong class="font-medium">主な意味:</strong> ${escapeHtml(wordObj.meaning)}</p> ${wordObj.pos ? `<p class="text-xs sm:text-sm text-gray-600 mt-1"><strong class="font-medium">主な品詞:</strong> ${escapeHtml(wordObj.pos)}</p>` : ''} ${otherTranslationsHtml} ${wordObj.example ? `<p class="text-xs sm:text-sm text-gray-600 mt-2 pt-2 border-t border-gray-100"><strong class="font-medium">例文:</strong> ${escapeHtml(wordObj.example)}</p>` : ''} ${wordObj.notes ? `<p class="text-xs sm:text-sm text-gray-500 mt-1"><strong class="font-medium">メモ:</strong> ${escapeHtml(wordObj.notes)}</p>` : ''} <p class="text-xs text-gray-400 mt-2"> 登録日: ${wordObj.createdAt?.seconds ? new Date(wordObj.createdAt.seconds * 1000).toLocaleString() : 'N/A'} </p> </div> <div class="flex space-x-2 flex-shrink-0 ml-0 sm:ml-4 mt-3 sm:mt-0"> <button data-id="${wordObj.id}" class="edit-btn p-2 text-xs sm:text-sm bg-yellow-500 hover:bg-yellow-600 text-white rounded-md transition-colors">編集</button> <button data-id="${wordObj.id}" class="delete-btn p-2 text-xs sm:text-sm bg-red-500 hover:bg-red-600 text-white rounded-md transition-colors">削除</button> </div> </div>`; ul.appendChild(li); }); wordList.appendChild(ul); document.querySelectorAll('.edit-btn').forEach(button => button.addEventListener('click', handleEdit)); document.querySelectorAll('.delete-btn').forEach(button => button.addEventListener('click', handleDelete)); }
         function escapeHtml(unsafe) { /* (変更なし) */ return String(unsafe ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#039;"); }
-        if (wordForm) { /* (変更なし) */ wordForm.addEventListener('submit', async (e) => { e.preventDefault(); if (!checkAllConfigsAndAuth()) return; const word = wordInput.value.trim(); const meaning = meaningInput.value.trim(); const pos = posInput.value.trim(); const example = exampleInput.value.trim(); const notes = notesInput.value.trim(); if (!word || !meaning) { showToast('単語と主な意味は必須です。', 'warning'); return; } try { const newWord = { word, meaning, pos, example, notes, authorEmail: currentLoggedInUser.email, authorUid: currentLoggedInUser.uid, geminiAllTranslations: lastFetchedGeminiTranslations, createdAt: serverTimestamp(), updatedAt: serverTimestamp() }; await addDoc(wordsCollectionRef, newWord); wordForm.reset(); if (geminiTranslationsDisplayArea) geminiTranslationsDisplayArea.innerHTML = '<p class="text-xs text-gray-400">単語を入力すると候補が表示されます。</p>'; lastFetchedGeminiTranslations = []; if (weblioSearchLink) weblioSearchLink.classList.add('hidden'); if (weblioSearchWordSpan) weblioSearchWordSpan.textContent = ''; showToast('単語を登録しました。', 'success'); } catch (error) { console.error("単語登録エラー:", error); showToast(`単語登録エラー: ${error.message}`, 'error'); } }); }
+        
+        if (wordForm) {
+            wordForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                if (!checkAllConfigsAndAuth()) return;
+                const word = wordInput.value.trim();
+                const meaning = meaningInput.value.trim();
+                const pos = posInput.value.trim();
+                const example = exampleInput.value.trim();
+                const notes = notesInput.value.trim();
+
+                if (!word || !meaning) {
+                    showToast('単語と主な意味は必須です。', 'warning');
+                    return;
+                }
+
+                // ★追加: 重複チェック
+                const newWordLowercase = word.toLowerCase();
+                const isDuplicate = allWordsForTest.some(existingWord => 
+                    existingWord.word.toLowerCase() === newWordLowercase
+                );
+
+                if (isDuplicate) {
+                    showToast(`単語「${escapeHtml(word)}」は既に登録されています。`, 'error');
+                    return;
+                }
+
+                try {
+                    const newWordData = {
+                        word, meaning, pos, example, notes,
+                        authorEmail: currentLoggedInUser.email,
+                        authorUid: currentLoggedInUser.uid,
+                        geminiAllTranslations: lastFetchedGeminiTranslations,
+                        createdAt: serverTimestamp(),
+                        updatedAt: serverTimestamp()
+                    };
+                    await addDoc(wordsCollectionRef, newWordData);
+                    wordForm.reset();
+                    if (geminiTranslationsDisplayArea) geminiTranslationsDisplayArea.innerHTML = '<p class="text-xs text-gray-400">単語を入力すると候補が表示されます。</p>';
+                    lastFetchedGeminiTranslations = [];
+                    if (weblioSearchLink) weblioSearchLink.classList.add('hidden');
+                    if (weblioSearchWordSpan) weblioSearchWordSpan.textContent = '';
+                    showToast('単語を登録しました。', 'success');
+                } catch (error) {
+                    console.error("単語登録エラー:", error);
+                    showToast(`単語登録エラー: ${error.message}`, 'error');
+                }
+            });
+        }
+
         async function handleEdit(e) { /* (変更なし) */ if (!checkAllConfigsAndAuth()) return; currentEditingWordId = e.target.dataset.id; if (!currentEditingWordId) { showToast('編集対象ID不明。', 'error'); return; } try { const wordDocRef = doc(wordsCollectionRef, currentEditingWordId); const docSnap = await getDoc(wordDocRef); if (docSnap.exists()) { const data = docSnap.data(); document.getElementById('editWord').value = data.word; document.getElementById('editMeaning').value = data.meaning; document.getElementById('editPos').value = data.pos || ''; document.getElementById('editExample').value = data.example || ''; document.getElementById('editNotes').value = data.notes || ''; editModal.classList.remove('hidden'); } else { showToast('編集対象の単語が見つかりません。', 'error'); } } catch (error) { console.error("編集データ取得エラー:", error); showToast(`編集データ取得エラー: ${error.message}`, 'error'); } }
         if (editWordForm) { /* (変更なし) */ editWordForm.addEventListener('submit', async (e) => { e.preventDefault(); if (!checkAllConfigsAndAuth() || !currentEditingWordId) { showToast('更新に必要な情報不足。', 'error'); return; } const updatedWordData = { word: document.getElementById('editWord').value.trim(), meaning: document.getElementById('editMeaning').value.trim(), pos: document.getElementById('editPos').value.trim(), example: document.getElementById('editExample').value.trim(), notes: document.getElementById('editNotes').value.trim(), updatedAt: serverTimestamp() }; if (!updatedWordData.word || !updatedWordData.meaning) { showToast('単語と意味は必須です。', 'warning'); return; } try { const wordDocRef = doc(wordsCollectionRef, currentEditingWordId); await updateDoc(wordDocRef, updatedWordData); closeEditModal(); showToast('単語を更新しました。', 'success'); } catch (error) { console.error("単語更新エラー:", error); showToast(`単語更新エラー: ${error.message}`, 'error'); } }); }
         if (cancelEditButton) cancelEditButton.addEventListener('click', closeEditModal);
@@ -158,67 +182,7 @@
         // --- 単語テスト機能 ---
         if (startTestButton) { /* (変更なし) */ startTestButton.addEventListener('click', () => { if (allWordsForTest.length === 0) { showToast("テストできる単語がありません。先に単語を登録してください。", "warning"); return; } const countOption = testQuestionCountSelect.value; let numQuestions; if (countOption === 'all') { numQuestions = allWordsForTest.length; } else { numQuestions = parseInt(countOption, 10); } if (isNaN(numQuestions) || numQuestions <= 0) { showToast("問題数を選択してください。", "warning"); return; } selectedQuestionCount = Math.min(numQuestions, allWordsForTest.length); if (selectedQuestionCount === 0) { showToast("テストできる単語がありません。", "warning"); return; } isTestActive = true; vocabManagementSection.classList.add('hidden'); testSection.classList.remove('hidden'); testControlSection.classList.add('hidden'); abortTestButton.classList.remove('hidden'); let tempTestWords = [...allWordsForTest]; for (let i = tempTestWords.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [tempTestWords[i], tempTestWords[j]] = [tempTestWords[j], tempTestWords[i]]; } testWords = tempTestWords.slice(0, selectedQuestionCount); currentQuestionIndex = 0; currentScore = 0; testResultArea.innerHTML = ''; displayNextQuestion(); }); }
         function displayNextQuestion() { /* (変更なし) */ if (currentQuestionIndex < testWords.length) { const wordData = testWords[currentQuestionIndex]; testWordDisplay.textContent = wordData.word; testAnswerInput.value = ''; testFeedbackArea.innerHTML = ''; checkAnswerButton.disabled = false; testAnswerInput.disabled = false; testAnswerInput.focus(); nextQuestionButton.classList.add('hidden'); endTestButton.classList.add('hidden'); abortTestButton.classList.remove('hidden'); currentQuestionInfo.textContent = `${currentQuestionIndex + 1} / ${testWords.length} 問目`; } else { showTestResults(); } }
-
-        if (checkAnswerButton) {
-            checkAnswerButton.addEventListener('click', () => {
-                if (!isTestActive || currentQuestionIndex >= testWords.length) return;
-
-                const userAnswer = testAnswerInput.value.trim().toLowerCase(); 
-                const currentWordData = testWords[currentQuestionIndex];
-                const mainMeaning = currentWordData.meaning.trim().toLowerCase();
-                
-                let isCorrect = false;
-                if (userAnswer === mainMeaning) {
-                    isCorrect = true;
-                }
-                if (!isCorrect && currentWordData.geminiAllTranslations && Array.isArray(currentWordData.geminiAllTranslations)) {
-                    for (const trans of currentWordData.geminiAllTranslations) {
-                        if (trans.translation && userAnswer === trans.translation.trim().toLowerCase()) {
-                            isCorrect = true;
-                            break; 
-                        }
-                    }
-                }
-
-                let feedbackHtml = '';
-                if (isCorrect) {
-                    feedbackHtml = '<p class="text-green-600 font-semibold">正解！</p>';
-                    currentScore++;
-                } else {
-                    feedbackHtml = `<p class="text-red-600 font-semibold">不正解...</p>`;
-                }
-                // ★修正: 正解・不正解に関わらず正答例を表示
-                feedbackHtml += `<div class="mt-2 text-sm text-gray-700">`;
-                feedbackHtml += `<p class="font-medium">正解例:</p>`;
-                feedbackHtml += `<ul class="list-disc list-inside ml-4 text-gray-600">`;
-                feedbackHtml += `<li><strong>主な意味:</strong> ${escapeHtml(currentWordData.meaning)}</li>`;
-                if (currentWordData.geminiAllTranslations && Array.isArray(currentWordData.geminiAllTranslations) && currentWordData.geminiAllTranslations.length > 0) {
-                    currentWordData.geminiAllTranslations.forEach(trans => {
-                        // 主な意味と全く同じものは表示しない（ただし品詞が異なる場合は表示しても良いかもしれないが、今回は単純化）
-                        if (trans.translation.trim().toLowerCase() !== mainMeaning) { 
-                            feedbackHtml += `<li>${escapeHtml(trans.translation)} (${escapeHtml(trans.pos)})</li>`;
-                        } else if (trans.pos.trim().toLowerCase() !== (currentWordData.pos || "").trim().toLowerCase()) {
-                            // 主な意味と同じでも品詞が異なれば表示する（オプション）
-                             feedbackHtml += `<li>${escapeHtml(trans.translation)} (${escapeHtml(trans.pos)})</li>`;
-                        }
-                    });
-                }
-                feedbackHtml += `</ul></div>`;
-                testFeedbackArea.innerHTML = feedbackHtml;
-
-                checkAnswerButton.disabled = true;
-                testAnswerInput.disabled = true;
-                nextQuestionButton.classList.remove('hidden');
-                abortTestButton.classList.add('hidden'); 
-
-                if (currentQuestionIndex >= testWords.length -1) {
-                    nextQuestionButton.textContent = "結果を見る";
-                } else {
-                    nextQuestionButton.textContent = "次の問題へ";
-                }
-            });
-        }
-        
+        if (checkAnswerButton) { /* (変更なし: 正解判定ロジックは以前の修正で対応済み) */ checkAnswerButton.addEventListener('click', () => { if (!isTestActive || currentQuestionIndex >= testWords.length) return; const userAnswer = testAnswerInput.value.trim().toLowerCase(); const currentWordData = testWords[currentQuestionIndex]; const mainMeaning = currentWordData.meaning.trim().toLowerCase(); let isCorrect = false; if (userAnswer === mainMeaning) { isCorrect = true; } if (!isCorrect && currentWordData.geminiAllTranslations && Array.isArray(currentWordData.geminiAllTranslations)) { for (const trans of currentWordData.geminiAllTranslations) { if (trans.translation && userAnswer === trans.translation.trim().toLowerCase()) { isCorrect = true; break; } } } let feedbackHtml = ''; if (isCorrect) { feedbackHtml = '<p class="text-green-600 font-semibold">正解！</p>'; currentScore++; } else { feedbackHtml = `<p class="text-red-600 font-semibold">不正解...</p>`; } feedbackHtml += `<div class="mt-2 text-sm text-gray-700">`; feedbackHtml += `<p class="font-medium">正解例:</p>`; feedbackHtml += `<ul class="list-disc list-inside ml-4 text-gray-600">`; feedbackHtml += `<li><strong>主な意味:</strong> ${escapeHtml(currentWordData.meaning)}</li>`; if (currentWordData.geminiAllTranslations && Array.isArray(currentWordData.geminiAllTranslations) && currentWordData.geminiAllTranslations.length > 0) { currentWordData.geminiAllTranslations.forEach(trans => { if (trans.translation.trim().toLowerCase() !== mainMeaning) { feedbackHtml += `<li>${escapeHtml(trans.translation)} (${escapeHtml(trans.pos)})</li>`; } else if (trans.pos.trim().toLowerCase() !== (currentWordData.pos || "").trim().toLowerCase()) { feedbackHtml += `<li>${escapeHtml(trans.translation)} (${escapeHtml(trans.pos)})</li>`; } }); } feedbackHtml += `</ul></div>`; testFeedbackArea.innerHTML = feedbackHtml; checkAnswerButton.disabled = true; testAnswerInput.disabled = true; nextQuestionButton.classList.remove('hidden'); abortTestButton.classList.add('hidden'); if (currentQuestionIndex >= testWords.length -1) { nextQuestionButton.textContent = "結果を見る"; } else { nextQuestionButton.textContent = "次の問題へ"; } }); }
         if (testAnswerInput) { /* (変更なし) */ testAnswerInput.addEventListener('keypress', function(event) { if (event.key === 'Enter' && !checkAnswerButton.disabled) { event.preventDefault(); checkAnswerButton.click(); } }); }
         if (nextQuestionButton) { /* (変更なし) */ nextQuestionButton.addEventListener('click', () => { currentQuestionIndex++; displayNextQuestion(); }); }
         function showTestResults() { /* (変更なし) */ testWordDisplay.textContent = 'テスト終了！'; currentQuestionInfo.textContent = ''; testAnswerInput.value = ''; testAnswerInput.classList.add('hidden'); checkAnswerButton.classList.add('hidden'); testFeedbackArea.innerHTML = ''; nextQuestionButton.classList.add('hidden'); abortTestButton.classList.add('hidden'); const percentage = testWords.length > 0 ? Math.round((currentScore / testWords.length) * 100) : 0; testResultArea.innerHTML = ` <h3 class="text-lg font-semibold">テスト結果</h3> <p>${testWords.length} 問中 ${currentScore} 問正解でした。</p> <p>正解率: ${percentage}%</p> `; endTestButton.classList.remove('hidden'); }
